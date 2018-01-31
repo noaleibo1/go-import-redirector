@@ -60,6 +60,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
@@ -77,18 +78,26 @@ var (
 	serveTLS         = flag.Bool("tls", false, "serve https on :443")
 	vcs              = flag.String("vcs", "git", "set version control `system`")
 	letsEncryptEmail = flag.String("letsencrypt", "", "use lets encrypt to issue TLS certificate, agreeing to TOS as `email` (implies -tls)")
-	importPath       string
-	repoPath         string
 	wildcard         bool
+)
+
+var (
+	filePath                     string
+	importCouplesWithoutWildCard map[string]string
+	importCouplesWithWildCard    map[string]string
 )
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage: go-import-redirector <import> <repo>\n")
+	fmt.Fprintf(os.Stderr, "usage (read from file): go-import-redirector <file path>\n")
 	fmt.Fprintf(os.Stderr, "options:\n")
 	flag.PrintDefaults()
 	fmt.Fprintf(os.Stderr, "examples:\n")
 	fmt.Fprintf(os.Stderr, "\tgo-import-redirector rsc.io/* https://github.com/rsc/*\n")
 	fmt.Fprintf(os.Stderr, "\tgo-import-redirector 9fans.net/go https://github.com/9fans/go\n")
+	fmt.Fprintf(os.Stderr, "\tgo-import-redirector ~/User/my_imports_and_repos.txt\n")
+	fmt.Fprintf(os.Stderr, "\n\texternal config file:\n")
+	fmt.Fprintf(os.Stderr, "\t\t9fans.net/go https://github.com/9fans/go\n")
 	os.Exit(2)
 }
 
@@ -97,36 +106,54 @@ func main() {
 	log.SetPrefix("go-import-redirector: ")
 	flag.Usage = usage
 	flag.Parse()
-	if flag.NArg() != 2 {
+	if flag.NArg() == 0 || flag.NArg() > 2 {
 		flag.Usage()
 	}
-	importPath = flag.Arg(0)
-	repoPath = flag.Arg(1)
-	if !strings.Contains(repoPath, "://") {
-		log.Fatal("repo path must be full URL")
+
+	hosts := []string{}
+	importCouplesWithWildCard = map[string]string{}
+	importCouplesWithoutWildCard = map[string]string{}
+
+	// Read imports and repos from file
+	if flag.NArg() == 1 {
+		filePath = flag.Arg(0)
+		if err := readFile(); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		importPath := strings.TrimSuffix(flag.Arg(0), "/") + "/"
+		repoPath := strings.TrimSuffix(flag.Arg(1), "/") + "/"
+		importCouplesWithoutWildCard[importPath] = repoPath
 	}
-	if strings.HasSuffix(importPath, "/*") != strings.HasSuffix(repoPath, "/*") {
-		log.Fatal("either both import and repo must have /* or neither")
+
+	for importPath, repoPath := range importCouplesWithoutWildCard {
+		if err := validateInput(importPath, repoPath); err != nil {
+			log.Fatal(err)
+		}
+		if strings.HasSuffix(importPath, "/*") {
+			delete(importCouplesWithoutWildCard, importPath)
+			importPath = strings.TrimSuffix(importPath, "/*")
+			repoPath = strings.TrimSuffix(repoPath, "/*")
+			importCouplesWithWildCard[importPath+"/"] = repoPath + "/"
+		}
+
+		http.HandleFunc(importPath, redirect)
+		http.HandleFunc(importPath+"/.ping", pong) // non-redirecting URL for debugging TLS certificates
+
+		host := importPath
+		if i := strings.Index(host, "/"); i >= 0 {
+			host = host[:i]
+		}
+		hosts = append(hosts, host)
 	}
-	if strings.HasSuffix(importPath, "/*") {
-		wildcard = true
-		importPath = strings.TrimSuffix(importPath, "/*")
-		repoPath = strings.TrimSuffix(repoPath, "/*")
-	}
-	http.HandleFunc(strings.TrimSuffix(importPath, "/")+"/", redirect)
-	http.HandleFunc(importPath+"/.ping", pong) // non-redirecting URL for debugging TLS certificates
+
 	if !*serveTLS {
 		log.Fatal(http.ListenAndServe(*addr, nil))
 	}
 
-	host := importPath
-	if i := strings.Index(host, "/"); i >= 0 {
-		host = host[:i]
-	}
-
 	m := new(letsencrypt.Manager)
 	m.CacheFile("letsencrypt.cache")
-	m.SetHosts([]string{host})
+	m.SetHosts(hosts)
 
 	if *letsEncryptEmail != "" && !m.Registered() {
 		if err := m.Register(*letsEncryptEmail, nil); err != nil {
@@ -135,6 +162,42 @@ func main() {
 	}
 
 	log.Fatal(m.Serve())
+}
+
+func validateInput(importPath string, repoPath string) error {
+	if !strings.Contains(repoPath, "://") {
+		log.Fatal("repo path must be full URL")
+		return fmt.Errorf("repo path must be full URL")
+	}
+	if strings.HasSuffix(importPath, "/*") != strings.HasSuffix(importPath, "/*") {
+		log.Fatal("either both import and repo must have /* or neither")
+		return fmt.Errorf("either both import and repo must have /* or neither")
+	}
+	return nil
+}
+
+func readFile() error {
+	log.Printf("Reading file: %s", filePath)
+	reader, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+
+		switch len(fields) {
+		case 0:
+			continue
+		case 2:
+			importPath := strings.TrimSuffix(fields[0], "/") + "/"
+			repoPath := strings.TrimSuffix(fields[1], "/") + "/"
+			importCouplesWithoutWildCard[importPath] = repoPath
+		default:
+			return fmt.Errorf("file malformed: %s", scanner.Text())
+		}
+	}
+	return nil
 }
 
 var tmpl = template.Must(template.New("main").Parse(`<!DOCTYPE html>
@@ -158,38 +221,35 @@ type data struct {
 }
 
 func redirect(w http.ResponseWriter, req *http.Request) {
-	path := strings.TrimSuffix(req.Host+req.URL.Path, "/")
+	log.Print("In redirect")
+	path := strings.TrimSuffix(req.Host+req.URL.Path, "/") + "/"
 	var importRoot, repoRoot, suffix string
-	if wildcard {
+	if repoPath, ok := importCouplesWithoutWildCard[path]; ok {
+		importRoot = path
+		repoRoot = repoPath
+		suffix = ""
+	} else if importPath, ok := getImportPathForWildCard(path); ok {
 		if path == importPath {
-			http.Redirect(w, req, "https://godoc.org/"+importPath, 302)
+			http.Redirect(w, req, "https://godoc.org/"+repoPath, 302)
 			return
 		}
-		if !strings.HasPrefix(path, importPath+"/") {
-			http.NotFound(w, req)
-			return
-		}
-		elem := path[len(importPath)+1:]
+		elem := path[len(importPath):]
 		if i := strings.Index(elem, "/"); i >= 0 {
 			elem, suffix = elem[:i], elem[i:]
 		}
-		importRoot = importPath + "/" + elem
-		repoRoot = repoPath + "/" + elem
+		importRoot = importPath + elem
+		repoRoot = repoPath + elem
 	} else {
-		if path != importPath && !strings.HasPrefix(path, importPath+"/") {
-			http.NotFound(w, req)
-			return
-		}
-		importRoot = importPath
-		repoRoot = repoPath
-		suffix = path[len(importPath):]
+		http.NotFound(w, req)
+		return
 	}
 	d := &data{
-		ImportRoot: importRoot,
+		ImportRoot: strings.TrimSuffix(importRoot, "/"),
 		VCS:        *vcs,
 		VCSRoot:    repoRoot,
 		Suffix:     suffix,
 	}
+	log.Printf("data:\n ImportRoot: %s, VCS: %s, VCSRoot: %s, Suffix: %s", d.ImportRoot, d.VCS, d.VCSRoot, d.Suffix)
 	var buf bytes.Buffer
 	err := tmpl.Execute(&buf, d)
 	if err != nil {
@@ -197,6 +257,14 @@ func redirect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.Write(buf.Bytes())
+}
+func getImportPathForWildCard(path string) (string, bool) {
+	for importPath, _ := range importCouplesWithoutWildCard {
+		if strings.HasPrefix(path, importPath) {
+			return importPath, true
+		}
+	}
+	return "", false
 }
 
 func pong(w http.ResponseWriter, req *http.Request) {

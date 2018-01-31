@@ -1,0 +1,2 @@
+gerrit.mobility/trips https://leibovic@gerrit.it.here.com/a/incubator/backend/trips.git
+mobility.here/cobra https://github.com/spf13/cobra

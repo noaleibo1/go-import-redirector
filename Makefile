@@ -86,3 +86,16 @@ ssh-%:
 
 allow-http:
 	gcloud compute firewall-rules create http --description "Incoming http allowed." --allow tcp:80 tcp:443
+
+#################################################################################
+################################### New Build ###################################
+#################################################################################
+
+build-linux:
+	mkdir -p bin/
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -o bin/go-import-redirector.linux
+
+build-docker-only:
+	docker build -f Dockerfile . -t go-import-redirector
+
+build-docker: build-linux build-docker-only

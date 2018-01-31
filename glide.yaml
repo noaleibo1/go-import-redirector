@@ -1,0 +1,4 @@
+package: github.com/rsc/go-import-redirector
+import:
+- package: rsc.io/letsencrypt
+  version: ~0.0.1

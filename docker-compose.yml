@@ -1,0 +1,12 @@
+version: '2'
+services:
+
+  go-import-redirector:
+    container_name: go-import-redirector
+    image: golang:1.8.3-alpine
+    volumes:
+      - .:/go/src/github.com/rsc/go-import-redirector
+    working_dir: /go/src/github.com/rsc/go-import-redirector
+    command: go run main.go test.txt
+    ports:
+      - "80:80"

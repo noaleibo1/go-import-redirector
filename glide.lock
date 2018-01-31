@@ -1,0 +1,36 @@
+hash: 74953ff7541f262e218b44fd38dceb628a61c5a37b90988e861654ec90af1826
+updated: 2018-01-30T13:34:27.37697529+02:00
+imports:
+- name: github.com/miekg/dns
+  version: 5364553f1ee9cddc7ac8b62dce148309c386695b
+- name: github.com/xenolf/lego
+  version: 6bddbfd17a6e1ab782617eeab2f2007c6550b160
+  subpackages:
+  - acme
+- name: golang.org/x/crypto
+  version: 3d37316aaa6bd9929127ac9a527abf408178ea7b
+  subpackages:
+  - ed25519
+  - ed25519/internal/edwards25519
+  - ocsp
+- name: golang.org/x/net
+  version: 0ed95abb35c445290478a5348a7b38bb154135fd
+  subpackages:
+  - bpf
+  - context
+  - internal/iana
+  - internal/socket
+  - ipv4
+  - ipv6
+- name: golang.org/x/time
+  version: 6dc17368e09b0e8634d71cac8168d853e869a0c7
+  subpackages:
+  - rate
+- name: gopkg.in/square/go-jose.v1
+  version: aa2e30fdd1fe9dd3394119af66451ae790d50e0d
+  subpackages:
+  - cipher
+  - json
+- name: rsc.io/letsencrypt
+  version: 33926faef6d434b854ea994228f11d0185faa0c1
+testImports: []
